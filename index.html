@@ -175,24 +175,22 @@ function listenForFeedback() {
   for (const [id, port] of midiAccess.inputs) {
     if (feedbackPorts.has(id)) continue;
     feedbackPorts.add(id);
-    port.onmidimessage = onFeedbackMessage;
-    log("", `Feedback input: ${port.name}`);
+    port.onmidimessage = (e) => onFeedbackMessage(e, port.name);
+    log("", `Feedback input: ${port.name} [${id}]`);
   }
 }
 
-function onFeedbackMessage(e) {
+function onFeedbackMessage(e, portName) {
   const [status, note, vel] = e.data;
   const type = status & 0xF0;
   if (type === 0x90 && vel > 0) {
-    // Note On — sample is playing
     const el = padsByNote.get(note);
     if (el) el.classList.add("playing");
-    log("noteon", `RX Note On   note=${note} vel=${vel}`);
+    log("noteon", `RX Note On   note=${note} vel=${vel}  ← ${portName}`);
   } else if (type === 0x80 || (type === 0x90 && vel === 0)) {
-    // Note Off — sample stopped
     const el = padsByNote.get(note);
     if (el) el.classList.remove("playing");
-    log("noteoff", `RX Note Off  note=${note}`);
+    log("noteoff", `RX Note Off  note=${note}  ← ${portName}`);
   }
 }
 
@@ -222,14 +220,14 @@ function sendNoteOn(channel, note, velocity) {
   if (!selectedOutput) { log("", "No output selected"); return; }
   const bytes = [0x90 | ((channel - 1) & 0xF), note & 0x7F, velocity & 0x7F];
   selectedOutput.send(bytes);
-  log("noteon", `TX Note On   ch=${channel} note=${note} vel=${velocity}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  log("noteon", `TX Note On   ch=${channel} note=${note} vel=${velocity}  → ${selectedOutput.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
 }
 
 function sendNoteOff(channel, note) {
   if (!selectedOutput) return;
   const bytes = [0x80 | ((channel - 1) & 0xF), note & 0x7F, 0];
   selectedOutput.send(bytes);
-  log("noteoff", `TX Note Off  ch=${channel} note=${note}               [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  log("noteoff", `TX Note Off  ch=${channel} note=${note}  → ${selectedOutput.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
 }
 
 // --- Pad rendering ---
