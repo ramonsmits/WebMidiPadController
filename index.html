@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIDI Soundboard</title>
+<style>
+  :root { --bg: #111119; --surface: #181825; --text: #ccc; --border: #2a2a3a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 1.5rem 1rem; user-select: none; }
+  h1 { font-size: 1.2rem; margin-bottom: 0.5rem; opacity: 0.5; font-weight: 400; letter-spacing: 0.05em; }
+  #toolbar { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; align-items: center; flex-wrap: wrap; }
+  #toolbar button, #toolbar select { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+  #toolbar button:hover { background: #222233; }
+  #status { font-size: 0.75rem; opacity: 0.4; }
+  #pad-grid { display: flex; flex-direction: column; gap: 8px; }
+  .pad-row { display: flex; gap: 8px; justify-content: center; }
+
+  .pad {
+    width: 130px; height: 130px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.06);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: transform 0.06s ease, box-shadow 0.06s ease;
+    font-size: 0.85rem;
+    touch-action: none;
+    position: relative;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+  .pad:hover { border-color: rgba(255,255,255,0.12); }
+  .pad.active { transform: scale(0.94); }
+  .pad .label { font-weight: 600; font-size: 0.95rem; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+  .pad .info { font-size: 0.65rem; opacity: 0.5; margin-top: 3px; pointer-events: none; }
+
+  @keyframes glow-jitter {
+    0%   { box-shadow: 0 0 18px 4px var(--glow), inset 0 0 12px 2px var(--glow-inner); }
+    25%  { box-shadow: 0 0 22px 6px var(--glow), inset 0 0 14px 3px var(--glow-inner); }
+    50%  { box-shadow: 0 0 16px 3px var(--glow), inset 0 0 10px 1px var(--glow-inner); }
+    75%  { box-shadow: 0 0 24px 5px var(--glow), inset 0 0 15px 2px var(--glow-inner); }
+    100% { box-shadow: 0 0 18px 4px var(--glow), inset 0 0 12px 2px var(--glow-inner); }
+  }
+  .pad.active { transform: scale(0.94); }
+  .pad.playing {
+    animation: glow-jitter 0.15s ease-in-out infinite;
+    border-color: rgba(255,255,255,0.15);
+  }
+  .pad.toggled {
+    border-color: rgba(255,255,255,0.2);
+  }
+
+  #event-log { margin-top: 1.2rem; width: min(95vw, 700px); max-height: 160px; overflow-y: auto; background: #0a0a12; border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 0.7rem; padding: 0.5rem; opacity: 0.8; }
+  #event-log .noteon { color: #3fb950; }
+  #event-log .noteoff { color: #f85149; }
+  #editor-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 10; align-items: center; justify-content: center; }
+  #editor-overlay.open { display: flex; }
+  #editor { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; width: min(90vw, 700px); max-height: 85vh; display: flex; flex-direction: column; gap: 0.75rem; }
+  #editor h2 { font-size: 1rem; font-weight: 500; }
+  #editor textarea { width: 100%; height: 50vh; background: #0a0a12; color: #c9d1d9; border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 0.8rem; padding: 0.75rem; resize: vertical; }
+  #editor .buttons { display: flex; gap: 0.5rem; justify-content: flex-end; }
+  #editor button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 0.8rem; }
+  #editor .save { background: #3a2a6e; color: white; border-color: #4a3a7e; }
+  #editor .save:hover { background: #4a3a80; }
+  #editor .cancel { background: var(--surface); color: var(--text); }
+  #error { color: #ff6b6b; font-size: 0.8rem; min-height: 1.2em; }
+</style>
+</head>
+<body>
+
+<h1>MIDI Soundboard</h1>
+<div id="toolbar">
+  <label>Output: <select id="midi-output"></select></label>
+  <button id="btn-edit">Edit Layout</button>
+  <span id="status">Requesting MIDI access...</span>
+</div>
+<div id="pad-grid"></div>
+<div id="event-log"></div>
+
+<div id="editor-overlay">
+  <div id="editor">
+    <h2>Edit Layout (JSON)</h2>
+    <textarea id="json-editor" spellcheck="false"></textarea>
+    <div id="error"></div>
+    <div class="buttons">
+      <button class="cancel" id="btn-cancel">Cancel</button>
+      <button class="save" id="btn-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = "midi-soundboard-layout";
+const STORAGE_OUTPUT = "midi-soundboard-output";
+const MAX_LOG = 200;
+
+const defaultLayout = [
+  [
+    { "channel": 1, "note": 36, "velocity": 127, "label": "Airhorn" },
+    { "channel": 1, "note": 37, "velocity": 127, "label": "Kids Yeah" },
+    { "channel": 1, "note": 38, "velocity": 127, "label": "Din" },
+    { "channel": 1, "note": 39, "velocity": 127, "label": "Message" }
+  ],
+  [
+    { "channel": 1, "note": 40, "velocity": 127, "label": "NS" },
+    { "channel": 1, "note": 41, "velocity": 127, "label": "Offline" },
+    { "channel": 1, "note": 42, "velocity": 127, "label": "Online" },
+    { "channel": 1, "note": 43, "velocity": 127, "label": "Sad Trombone" }
+  ],
+  [
+    { "channel": 1, "note": 44, "velocity": 127, "label": "Deep Note" },
+    { "channel": 1, "note": 45, "velocity": 127, "label": "Foghorn" },
+    { "channel": 1, "note": 46, "velocity": 127, "label": "Shutdown" },
+    { "channel": 1, "note": 47, "velocity": 127, "label": "Win 3.1" }
+  ]
+];
+
+let layout = loadLayout();
+let midiAccess = null;
+let selectedOutput = null;
+
+function loadLayout() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {}
+  return defaultLayout;
+}
+
+function saveLayout(l) {
+  layout = l;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(l));
+}
+
+// --- Event log ---
+
+const logEl = document.getElementById("event-log");
+
+function log(cls, text) {
+  const line = document.createElement("div");
+  line.className = cls;
+  const ts = new Date().toLocaleTimeString("en", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 });
+  line.textContent = `${ts}  ${text}`;
+  logEl.appendChild(line);
+  while (logEl.children.length > MAX_LOG) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- MIDI ---
+
+async function initMidi() {
+  const status = document.getElementById("status");
+  try {
+    midiAccess = await navigator.requestMIDIAccess();
+    midiAccess.onstatechange = () => { populateOutputs(); listenForFeedback(); };
+    populateOutputs();
+    listenForFeedback();
+    status.textContent = "MIDI connected";
+    log("", "MIDI access granted");
+  } catch (e) {
+    status.textContent = "MIDI unavailable: " + e.message;
+    log("", "MIDI error: " + e.message);
+  }
+}
+
+// --- Feedback: listen on MIDI inputs for "Soundboard" port ---
+const feedbackPorts = new Set();
+
+function listenForFeedback() {
+  for (const [id, port] of midiAccess.inputs) {
+    if (feedbackPorts.has(id)) continue;
+    if (port.name === "Soundboard") {
+      feedbackPorts.add(id);
+      port.onmidimessage = onFeedbackMessage;
+      log("", `Feedback input: ${port.name}`);
+    }
+  }
+}
+
+function onFeedbackMessage(e) {
+  const [status, note, vel] = e.data;
+  const type = status & 0xF0;
+  if (type === 0x90 && vel > 0) {
+    // Note On — sample is playing
+    const el = padsByNote.get(note);
+    if (el) el.classList.add("playing");
+    log("noteon", `RX Note On   note=${note} vel=${vel}`);
+  } else if (type === 0x80 || (type === 0x90 && vel === 0)) {
+    // Note Off — sample stopped
+    const el = padsByNote.get(note);
+    if (el) el.classList.remove("playing");
+    log("noteoff", `RX Note Off  note=${note}`);
+  }
+}
+
+function populateOutputs() {
+  const select = document.getElementById("midi-output");
+  const prev = select.value || localStorage.getItem(STORAGE_OUTPUT);
+  select.innerHTML = "";
+  for (const [id, port] of midiAccess.outputs) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = port.name;
+    select.appendChild(opt);
+  }
+  if (prev && select.querySelector(`option[value="${prev}"]`)) {
+    select.value = prev;
+  }
+  selectedOutput = midiAccess.outputs.get(select.value) || null;
+}
+
+document.getElementById("midi-output").addEventListener("change", (e) => {
+  selectedOutput = midiAccess.outputs.get(e.target.value) || null;
+  localStorage.setItem(STORAGE_OUTPUT, e.target.value);
+  log("", `Output: ${selectedOutput?.name || "none"}`);
+});
+
+function sendNoteOn(channel, note, velocity) {
+  if (!selectedOutput) { log("", "No output selected"); return; }
+  const bytes = [0x90 | ((channel - 1) & 0xF), note & 0x7F, velocity & 0x7F];
+  selectedOutput.send(bytes);
+  log("noteon", `TX Note On   ch=${channel} note=${note} vel=${velocity}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+}
+
+function sendNoteOff(channel, note) {
+  if (!selectedOutput) return;
+  const bytes = [0x80 | ((channel - 1) & 0xF), note & 0x7F, 0];
+  selectedOutput.send(bytes);
+  log("noteoff", `TX Note Off  ch=${channel} note=${note}               [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+}
+
+// --- Pad rendering ---
+
+const padsByNote = new Map(); // note number → DOM element
+
+// Muted, dark-friendly palette
+const colors = [
+  { bg: "#2a1845", glow: "rgba(120,50,200,0.4)", glowInner: "rgba(120,50,200,0.15)" },
+  { bg: "#3a1530", glow: "rgba(200,50,100,0.4)", glowInner: "rgba(200,50,100,0.15)" },
+  { bg: "#152a3a", glow: "rgba(50,150,220,0.4)", glowInner: "rgba(50,150,220,0.15)" },
+  { bg: "#2a2215", glow: "rgba(200,140,50,0.4)", glowInner: "rgba(200,140,50,0.15)" },
+  { bg: "#153a20", glow: "rgba(50,200,90,0.4)",  glowInner: "rgba(50,200,90,0.15)" },
+  { bg: "#2a153a", glow: "rgba(170,50,200,0.4)", glowInner: "rgba(170,50,200,0.15)" },
+  { bg: "#2a2a15", glow: "rgba(200,200,50,0.35)",glowInner: "rgba(200,200,50,0.12)" },
+  { bg: "#153035", glow: "rgba(50,200,200,0.4)", glowInner: "rgba(50,200,200,0.15)" },
+  { bg: "#251535", glow: "rgba(140,60,180,0.4)", glowInner: "rgba(140,60,180,0.15)" },
+  { bg: "#1a2a2a", glow: "rgba(80,180,160,0.4)", glowInner: "rgba(80,180,160,0.15)" },
+  { bg: "#2a1a1a", glow: "rgba(180,80,80,0.4)",  glowInner: "rgba(180,80,80,0.15)" },
+  { bg: "#1a1a2a", glow: "rgba(100,100,200,0.4)",glowInner: "rgba(100,100,200,0.15)" },
+];
+
+function renderPads() {
+  const grid = document.getElementById("pad-grid");
+  grid.innerHTML = "";
+  padsByNote.clear();
+  let colorIdx = 0;
+  for (const row of layout) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "pad-row";
+    for (const pad of row) {
+      const c = colors[colorIdx % colors.length];
+      const el = document.createElement("div");
+      el.className = "pad";
+      el.style.background = c.bg;
+      el.style.setProperty("--glow", c.glow);
+      el.style.setProperty("--glow-inner", c.glowInner);
+      el.innerHTML = `<span class="label">${esc(pad.label)}</span><span class="info">ch${pad.channel} n${pad.note}</span>`;
+
+      // Left click: note on while held, note off on release
+      el.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        el.setPointerCapture(e.pointerId);
+        el.classList.add("active");
+        sendNoteOn(pad.channel, pad.note, pad.velocity);
+      });
+      el.addEventListener("pointerup", (e) => {
+        if (e.button !== 0) return;
+        el.releasePointerCapture(e.pointerId);
+        el.classList.remove("active");
+        sendNoteOff(pad.channel, pad.note);
+      });
+      el.addEventListener("pointercancel", (e) => {
+        el.releasePointerCapture(e.pointerId);
+        el.classList.remove("active");
+        sendNoteOff(pad.channel, pad.note);
+      });
+      // Right click: toggle — send note on if off, note off if on
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (el.classList.contains("toggled")) {
+          el.classList.remove("toggled");
+          sendNoteOff(pad.channel, pad.note);
+        } else {
+          el.classList.add("toggled");
+          sendNoteOn(pad.channel, pad.note, pad.velocity);
+        }
+      });
+
+      padsByNote.set(pad.note, el);
+      rowEl.appendChild(el);
+      colorIdx++;
+    }
+    grid.appendChild(rowEl);
+  }
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// --- Editor ---
+
+document.getElementById("btn-edit").addEventListener("click", () => {
+  document.getElementById("json-editor").value = JSON.stringify(layout, null, 2);
+  document.getElementById("error").textContent = "";
+  document.getElementById("editor-overlay").classList.add("open");
+});
+
+document.getElementById("btn-cancel").addEventListener("click", () => {
+  document.getElementById("editor-overlay").classList.remove("open");
+});
+
+document.getElementById("btn-save").addEventListener("click", () => {
+  const errEl = document.getElementById("error");
+  try {
+    const parsed = JSON.parse(document.getElementById("json-editor").value);
+    if (!Array.isArray(parsed)) throw new Error("Root must be an array of rows");
+    for (let i = 0; i < parsed.length; i++) {
+      if (!Array.isArray(parsed[i])) throw new Error(`Row ${i} must be an array`);
+      for (let j = 0; j < parsed[i].length; j++) {
+        const p = parsed[i][j];
+        if (typeof p.channel !== "number") throw new Error(`Row ${i} pad ${j}: channel must be a number`);
+        if (typeof p.note !== "number") throw new Error(`Row ${i} pad ${j}: note must be a number`);
+        if (typeof p.velocity !== "number") throw new Error(`Row ${i} pad ${j}: velocity must be a number`);
+        if (typeof p.label !== "string") throw new Error(`Row ${i} pad ${j}: label must be a string`);
+      }
+    }
+    saveLayout(parsed);
+    renderPads();
+    document.getElementById("editor-overlay").classList.remove("open");
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
+});
+
+// --- Init ---
+renderPads();
+initMidi();
+</script>
+</body>
+</html>
