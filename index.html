@@ -168,17 +168,15 @@ async function initMidi() {
   }
 }
 
-// --- Feedback: listen on MIDI inputs for "Soundboard" port ---
+// --- Feedback: listen on all MIDI inputs ---
 const feedbackPorts = new Set();
 
 function listenForFeedback() {
   for (const [id, port] of midiAccess.inputs) {
     if (feedbackPorts.has(id)) continue;
-    if (port.name === "Soundboard") {
-      feedbackPorts.add(id);
-      port.onmidimessage = onFeedbackMessage;
-      log("", `Feedback input: ${port.name}`);
-    }
+    feedbackPorts.add(id);
+    port.onmidimessage = onFeedbackMessage;
+    log("", `Feedback input: ${port.name}`);
   }
 }
 
