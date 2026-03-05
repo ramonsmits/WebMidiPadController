@@ -19,14 +19,25 @@
   #device-panel {
     width: min(95vw, 700px);
     max-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
     transition: max-height 0.3s ease, margin 0.3s ease;
     margin-bottom: 0;
   }
   #device-panel.open {
     max-height: 60vh;
     margin-bottom: 1rem;
+    overflow-y: auto;
+  }
+  #device-panel-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  @media (min-width: 600px) {
+    #device-panel-inner {
+      flex-direction: row;
+      gap: 0.5rem;
+    }
   }
   .device-section {
     background: var(--surface);
@@ -34,6 +45,8 @@
     border-radius: 8px;
     padding: 0.6rem 0.8rem;
     margin-top: 0.5rem;
+    flex: 1;
+    min-width: 0;
   }
   .device-section h3 {
     font-size: 0.7rem;
@@ -380,6 +393,8 @@ btnDevices.addEventListener("click", () => {
 function renderDevicePanel() {
   if (!midiAccess) return;
   devicePanel.innerHTML = "";
+  const inner = document.createElement("div");
+  inner.id = "device-panel-inner";
 
   // Outputs section
   const outSection = document.createElement("div");
@@ -396,7 +411,7 @@ function renderDevicePanel() {
     empty.textContent = "No output devices";
     outSection.appendChild(empty);
   }
-  devicePanel.appendChild(outSection);
+  inner.appendChild(outSection);
 
   // Inputs section
   const inSection = document.createElement("div");
@@ -413,7 +428,8 @@ function renderDevicePanel() {
     empty.textContent = "No input devices";
     inSection.appendChild(empty);
   }
-  devicePanel.appendChild(inSection);
+  inner.appendChild(inSection);
+  devicePanel.appendChild(inner);
 }
 
 function makeDeviceRow(id, port, type) {
