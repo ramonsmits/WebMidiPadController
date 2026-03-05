@@ -19,12 +19,13 @@
   #device-panel {
     width: min(95vw, 700px);
     max-height: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     transition: max-height 0.3s ease, margin 0.3s ease;
     margin-bottom: 0;
   }
   #device-panel.open {
-    max-height: 500px;
+    max-height: 60vh;
     margin-bottom: 1rem;
   }
   .device-section {
