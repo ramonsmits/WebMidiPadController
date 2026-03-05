@@ -5,14 +5,110 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MIDI Soundboard</title>
 <style>
-  :root { --bg: #111119; --surface: #181825; --text: #ccc; --border: #2a2a3a; }
+  :root { --bg: #111119; --surface: #181825; --text: #ccc; --border: #2a2a3a; --accent: #3a2a6e; --accent-hover: #4a3a80; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 1.5rem 1rem; user-select: none; }
   h1 { font-size: 1.2rem; margin-bottom: 0.5rem; opacity: 0.5; font-weight: 400; letter-spacing: 0.05em; }
-  #toolbar { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; align-items: center; flex-wrap: wrap; }
-  #toolbar button, #toolbar select { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+  #toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
+  #toolbar button { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
   #toolbar button:hover { background: #222233; }
+  #toolbar button.active { background: var(--accent); border-color: #4a3a7e; }
   #status { font-size: 0.75rem; opacity: 0.4; }
+
+  /* Device panel */
+  #device-panel {
+    width: min(95vw, 700px);
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, margin 0.3s ease;
+    margin-bottom: 0;
+  }
+  #device-panel.open {
+    max-height: 500px;
+    margin-bottom: 1rem;
+  }
+  .device-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    margin-top: 0.5rem;
+  }
+  .device-section h3 {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.5;
+    margin-bottom: 0.4rem;
+    font-weight: 500;
+  }
+  .device-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0;
+  }
+  .device-row + .device-row {
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .device-name {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    margin-right: 0.5rem;
+  }
+  .device-row.disconnected .device-name {
+    opacity: 0.35;
+    text-decoration: line-through;
+  }
+  .device-empty {
+    font-size: 0.75rem;
+    opacity: 0.3;
+    font-style: italic;
+    padding: 0.2rem 0;
+  }
+
+  /* Toggle switch */
+  .toggle {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle .slider {
+    position: absolute;
+    inset: 0;
+    background: #2a2a3a;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle .slider::before {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    top: 3px;
+    background: #666;
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle input:checked + .slider {
+    background: var(--accent);
+  }
+  .toggle input:checked + .slider::before {
+    transform: translateX(16px);
+    background: #ccc;
+  }
+
   #pad-grid { display: flex; flex-direction: column; gap: 8px; }
   .pad-row { display: flex; gap: 8px; justify-content: center; }
 
@@ -41,7 +137,6 @@
     75%  { box-shadow: 0 0 24px 5px var(--glow), inset 0 0 15px 2px var(--glow-inner); }
     100% { box-shadow: 0 0 18px 4px var(--glow), inset 0 0 12px 2px var(--glow-inner); }
   }
-  .pad.active { transform: scale(0.94); }
   .pad.playing {
     animation: glow-jitter 0.15s ease-in-out infinite;
     border-color: rgba(255,255,255,0.15);
@@ -70,10 +165,11 @@
 
 <h1>MIDI Soundboard</h1>
 <div id="toolbar">
-  <label>Output: <select id="midi-output"></select></label>
+  <button id="btn-devices">Devices</button>
   <button id="btn-edit">Edit Layout</button>
   <span id="status">Requesting MIDI access...</span>
 </div>
+<div id="device-panel"></div>
 <div id="pad-grid"></div>
 <div id="event-log"></div>
 
@@ -91,7 +187,8 @@
 
 <script>
 const STORAGE_KEY = "midi-soundboard-layout";
-const STORAGE_OUTPUT = "midi-soundboard-output";
+const STORAGE_ENABLED_OUTPUTS = "midi-soundboard-enabled-outputs";
+const STORAGE_ENABLED_INPUTS = "midi-soundboard-enabled-inputs";
 const MAX_LOG = 200;
 
 const defaultLayout = [
@@ -122,7 +219,10 @@ const defaultLayout = [
 
 let layout = loadLayout();
 let midiAccess = null;
-let selectedOutput = null;
+
+// Maps: port id → MIDIPort, for currently enabled devices
+const enabledOutputs = new Map();
+const enabledInputs = new Map();
 
 function loadLayout() {
   try {
@@ -135,6 +235,21 @@ function loadLayout() {
 function saveLayout(l) {
   layout = l;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(l));
+}
+
+// Saved preferences are stored by device name (IDs are ephemeral)
+function loadSavedNames(key) {
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored) return new Set(JSON.parse(stored));
+  } catch {}
+  return null;
+}
+
+function savePref(key, map) {
+  const names = [];
+  for (const port of map.values()) names.push(port.name);
+  localStorage.setItem(key, JSON.stringify(names));
 }
 
 // --- Event log ---
@@ -151,16 +266,22 @@ function log(cls, text) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// --- Status ---
+
+function updateStatus() {
+  const outCount = enabledOutputs.size;
+  const inCount = enabledInputs.size;
+  document.getElementById("status").textContent = `MIDI: ${outCount} out, ${inCount} in`;
+}
+
 // --- MIDI ---
 
 async function initMidi() {
   const status = document.getElementById("status");
   try {
     midiAccess = await navigator.requestMIDIAccess();
-    midiAccess.onstatechange = () => { populateOutputs(); listenForFeedback(); };
-    populateOutputs();
-    listenForFeedback();
-    status.textContent = "MIDI connected";
+    midiAccess.onstatechange = onStateChange;
+    applyInitialDevices();
     log("", "MIDI access granted");
   } catch (e) {
     status.textContent = "MIDI unavailable: " + e.message;
@@ -168,16 +289,67 @@ async function initMidi() {
   }
 }
 
-// --- Feedback: listen on all MIDI inputs ---
-const feedbackPorts = new Set();
+function applyInitialDevices() {
+  const savedOutputNames = loadSavedNames(STORAGE_ENABLED_OUTPUTS);
+  const savedInputNames = loadSavedNames(STORAGE_ENABLED_INPUTS);
 
-function listenForFeedback() {
-  for (const [id, port] of midiAccess.inputs) {
-    if (feedbackPorts.has(id)) continue;
-    feedbackPorts.add(id);
-    port.onmidimessage = (e) => onFeedbackMessage(e, port.name);
-    log("", `Feedback input: ${port.name} [${id}]`);
+  for (const [id, port] of midiAccess.outputs) {
+    if (savedOutputNames && savedOutputNames.has(port.name)) {
+      enabledOutputs.set(id, port);
+    }
   }
+
+  for (const [id, port] of midiAccess.inputs) {
+    // First time (no saved prefs): enable all inputs (matches old behavior)
+    if (savedInputNames === null || savedInputNames.has(port.name)) {
+      enableInput(id, port);
+    }
+  }
+
+  renderDevicePanel();
+  updateStatus();
+}
+
+function onStateChange(e) {
+  const port = e.port;
+  if (port.state === "disconnected") {
+    if (port.type === "output") enabledOutputs.delete(port.id);
+    if (port.type === "input") {
+      disableInput(port.id);
+    }
+  } else if (port.state === "connected") {
+    // Auto-enable if name matches saved preference
+    if (port.type === "output") {
+      const savedNames = loadSavedNames(STORAGE_ENABLED_OUTPUTS);
+      if (savedNames && savedNames.has(port.name)) {
+        enabledOutputs.set(port.id, port);
+      }
+    }
+    if (port.type === "input") {
+      const savedNames = loadSavedNames(STORAGE_ENABLED_INPUTS);
+      // null means first time → enable all
+      if (savedNames === null || savedNames.has(port.name)) {
+        enableInput(port.id, port);
+      }
+    }
+  }
+  renderDevicePanel();
+  updateStatus();
+  log("", `${port.type} ${port.state}: ${port.name}`);
+}
+
+// --- Input listening ---
+
+function enableInput(id, port) {
+  if (enabledInputs.has(id)) return;
+  enabledInputs.set(id, port);
+  port.onmidimessage = (e) => onFeedbackMessage(e, port.name);
+}
+
+function disableInput(id) {
+  const port = enabledInputs.get(id);
+  if (port) port.onmidimessage = null;
+  enabledInputs.delete(id);
 }
 
 function onFeedbackMessage(e, portName) {
@@ -186,53 +358,131 @@ function onFeedbackMessage(e, portName) {
   if (type === 0x90 && vel > 0) {
     const el = padsByNote.get(note);
     if (el) el.classList.add("playing");
-    log("noteon", `RX Note On   note=${note} vel=${vel}  ← ${portName}`);
+    log("noteon", `RX Note On   note=${note} vel=${vel}  \u2190 ${portName}`);
   } else if (type === 0x80 || (type === 0x90 && vel === 0)) {
     const el = padsByNote.get(note);
     if (el) el.classList.remove("playing");
-    log("noteoff", `RX Note Off  note=${note}  ← ${portName}`);
+    log("noteoff", `RX Note Off  note=${note}  \u2190 ${portName}`);
   }
 }
 
-function populateOutputs() {
-  const select = document.getElementById("midi-output");
-  const prev = select.value || localStorage.getItem(STORAGE_OUTPUT);
-  select.innerHTML = "";
-  for (const [id, port] of midiAccess.outputs) {
-    const opt = document.createElement("option");
-    opt.value = id;
-    opt.textContent = port.name;
-    select.appendChild(opt);
-  }
-  if (prev && select.querySelector(`option[value="${prev}"]`)) {
-    select.value = prev;
-  }
-  selectedOutput = midiAccess.outputs.get(select.value) || null;
-}
+// --- Device panel ---
 
-document.getElementById("midi-output").addEventListener("change", (e) => {
-  selectedOutput = midiAccess.outputs.get(e.target.value) || null;
-  localStorage.setItem(STORAGE_OUTPUT, e.target.value);
-  log("", `Output: ${selectedOutput?.name || "none"}`);
+const devicePanel = document.getElementById("device-panel");
+const btnDevices = document.getElementById("btn-devices");
+
+btnDevices.addEventListener("click", () => {
+  devicePanel.classList.toggle("open");
+  btnDevices.classList.toggle("active");
 });
 
+function renderDevicePanel() {
+  if (!midiAccess) return;
+  devicePanel.innerHTML = "";
+
+  // Outputs section
+  const outSection = document.createElement("div");
+  outSection.className = "device-section";
+  outSection.innerHTML = "<h3>Outputs</h3>";
+  let outCount = 0;
+  for (const [id, port] of midiAccess.outputs) {
+    outSection.appendChild(makeDeviceRow(id, port, "output"));
+    outCount++;
+  }
+  if (outCount === 0) {
+    const empty = document.createElement("div");
+    empty.className = "device-empty";
+    empty.textContent = "No output devices";
+    outSection.appendChild(empty);
+  }
+  devicePanel.appendChild(outSection);
+
+  // Inputs section
+  const inSection = document.createElement("div");
+  inSection.className = "device-section";
+  inSection.innerHTML = "<h3>Inputs</h3>";
+  let inCount = 0;
+  for (const [id, port] of midiAccess.inputs) {
+    inSection.appendChild(makeDeviceRow(id, port, "input"));
+    inCount++;
+  }
+  if (inCount === 0) {
+    const empty = document.createElement("div");
+    empty.className = "device-empty";
+    empty.textContent = "No input devices";
+    inSection.appendChild(empty);
+  }
+  devicePanel.appendChild(inSection);
+}
+
+function makeDeviceRow(id, port, type) {
+  const row = document.createElement("div");
+  row.className = "device-row";
+  if (port.state === "disconnected") row.classList.add("disconnected");
+
+  const name = document.createElement("span");
+  name.className = "device-name";
+  name.textContent = port.name;
+  row.appendChild(name);
+
+  const toggle = document.createElement("label");
+  toggle.className = "toggle";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  const isEnabled = type === "output" ? enabledOutputs.has(id) : enabledInputs.has(id);
+  input.checked = isEnabled;
+  input.addEventListener("change", () => {
+    if (type === "output") {
+      if (input.checked) {
+        enabledOutputs.set(id, port);
+      } else {
+        enabledOutputs.delete(id);
+      }
+      savePref(STORAGE_ENABLED_OUTPUTS, enabledOutputs);
+      log("", `Output ${input.checked ? "enabled" : "disabled"}: ${port.name}`);
+    } else {
+      if (input.checked) {
+        enableInput(id, port);
+      } else {
+        disableInput(id);
+      }
+      savePref(STORAGE_ENABLED_INPUTS, enabledInputs);
+      log("", `Input ${input.checked ? "enabled" : "disabled"}: ${port.name}`);
+    }
+    updateStatus();
+  });
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  toggle.appendChild(input);
+  toggle.appendChild(slider);
+  row.appendChild(toggle);
+
+  return row;
+}
+
+// --- MIDI send (multi-output) ---
+
 function sendNoteOn(channel, note, velocity) {
-  if (!selectedOutput) { log("", "No output selected"); return; }
+  if (enabledOutputs.size === 0) { log("", "No outputs enabled"); return; }
   const bytes = [0x90 | ((channel - 1) & 0xF), note & 0x7F, velocity & 0x7F];
-  selectedOutput.send(bytes);
-  log("noteon", `TX Note On   ch=${channel} note=${note} vel=${velocity}  → ${selectedOutput.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  for (const [, port] of enabledOutputs) {
+    port.send(bytes);
+    log("noteon", `TX Note On   ch=${channel} note=${note} vel=${velocity}  \u2192 ${port.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  }
 }
 
 function sendNoteOff(channel, note) {
-  if (!selectedOutput) return;
+  if (enabledOutputs.size === 0) return;
   const bytes = [0x80 | ((channel - 1) & 0xF), note & 0x7F, 0];
-  selectedOutput.send(bytes);
-  log("noteoff", `TX Note Off  ch=${channel} note=${note}  → ${selectedOutput.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  for (const [, port] of enabledOutputs) {
+    port.send(bytes);
+    log("noteoff", `TX Note Off  ch=${channel} note=${note}  \u2192 ${port.name}  [${bytes.map(b => b.toString(16).padStart(2,"0")).join(" ")}]`);
+  }
 }
 
 // --- Pad rendering ---
 
-const padsByNote = new Map(); // note number → DOM element
+const padsByNote = new Map(); // note number -> DOM element
 
 // Muted, dark-friendly palette
 const colors = [
@@ -289,7 +539,7 @@ function renderPads() {
         el.classList.remove("active");
         sendNoteOff(pad.channel, pad.note);
       });
-      // Right click: toggle — send note on if off, note off if on
+      // Right click: toggle -- send note on if off, note off if on
       el.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (el.classList.contains("toggled")) {
